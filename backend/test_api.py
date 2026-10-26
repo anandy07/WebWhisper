@@ -129,3 +129,36 @@ def test_failed_old_index_cleanup_does_not_mix_pages(fake_llm, monkeypatch):
     _, events = ask("What water temperature should I use?")
     citations = next(e["citations"] for e in events if e["type"] == "citations")
     assert {c["page_title"] for c in citations} == {"Tea Guide"}
+
+
+def test_index_rejects_oversized_page(monkeypatch):
+    big = "x" * 200_000
+    page = {**PAGE, "sources": [{"text": big}, {"text": big}]}
+    response = client.post("/api/v1/index", json=page)
+    assert response.status_code == 422
+    assert "too large" in response.text
+
+
+def test_heading_is_embedded_with_chunk():
+    client.post("/api/v1/index", json=PAGE)
+    stored = rag.get_vector_store().get(where={"session_id": {"$eq": SESSION}})
+    assert any(doc.startswith("Brewing\n\n") for doc in stored["documents"])
+
+
+def test_least_recently_used_session_is_evicted(monkeypatch):
+    monkeypatch.setattr(chat, "MAX_SESSIONS", 1)
+    old, new = "evict-session-old1", "evict-session-new1"
+    client.post("/api/v1/index", json={**PAGE, "session_id": old})
+    client.post("/api/v1/index", json={**PAGE, "session_id": new})
+
+    assert chat.get_session(old) is None
+    assert chat.get_session(new) is not None
+    stored = rag.get_vector_store().get(where={"session_id": {"$eq": old}})
+    assert stored["ids"] == []
+
+
+def test_expired_session_is_not_found(monkeypatch):
+    client.post("/api/v1/index", json=PAGE)
+    monkeypatch.setattr(chat, "SESSION_TTL_SECONDS", -1)
+    response, _ = ask("Still there?")
+    assert response.status_code == 404

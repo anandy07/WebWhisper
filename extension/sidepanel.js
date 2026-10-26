@@ -2,6 +2,8 @@ const API = "http://127.0.0.1:8000/api/v1";
 const $ = (id) => document.getElementById(id);
 // One session per panel: re-analyzing replaces this panel's old page index.
 const sessionId = crypto.randomUUID();
+// True once a page is indexed; a failed re-analyze keeps the previous index.
+let hasIndex = false;
 
 async function post(path, body) {
   let res;
@@ -16,9 +18,12 @@ async function post(path, body) {
   }
   if (!res.ok) {
     const { detail } = await res.json().catch(() => ({}));
-    throw new Error(
-      typeof detail === "string" ? detail : `Request failed (${res.status})`,
-    );
+    // Validation errors (422) arrive as a list; show the first message.
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail?.[0]?.msg?.replace(/^Value error, /, "");
+    throw new Error(message || `Request failed (${res.status})`);
   }
   return res;
 }
@@ -45,7 +50,7 @@ function extractPage() {
     if (/^H\d$/.test(el.tagName)) {
       if (el !== lastBlock) {
         flush();
-        current = { heading: el.innerText.trim(), text: "" };
+        current = { heading: el.innerText.trim().slice(0, 500), text: "" };
       }
       lastBlock = el;
       continue;
@@ -60,7 +65,7 @@ function extractPage() {
   if (!sources.length) sources.push({ heading: null, text: root.innerText });
   return {
     page_url: location.href,
-    page_title: document.title || location.href,
+    page_title: (document.title || location.href).slice(0, 500),
     sources,
   };
 }
@@ -116,6 +121,7 @@ $("analyze").onclick = async () => {
       func: extractPage,
     });
     await post("index", { session_id: sessionId, ...result });
+    hasIndex = true;
     showNote("Ready. Ask a question below.");
     setStatus("ready", result.page_title);
     setReady(true);
@@ -127,6 +133,8 @@ $("analyze").onclick = async () => {
         ? "Chrome blocks reading this page."
         : `Failed: ${err.message}`,
     );
+    // The backend still holds the last indexed page; keep chat usable.
+    setReady(hasIndex);
   }
   $("analyze").disabled = false;
 };

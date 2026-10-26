@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import threading
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -17,8 +19,10 @@ from config import (
     LLM_MODEL,
     LLM_PROVIDER,
     MAX_HISTORY_MESSAGES,
+    MAX_SESSIONS,
+    SESSION_TTL_SECONDS,
 )
-from rag import format_retrieved_context, retrieve_relevant_chunks
+from rag import delete_session_index, format_retrieved_context, retrieve_relevant_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +39,54 @@ class PageSession:
     session_id: str
     index_version: str
     history: list[dict[str, str]] = field(default_factory=list)
+    last_used: float = field(default_factory=time.monotonic)
 
 
 _sessions: dict[str, PageSession] = {}
+# Indexing runs in FastAPI's thread pool, so guard changes to _sessions.
+_sessions_lock = threading.Lock()
+
+
+def is_expired(session: PageSession) -> bool:
+    return time.monotonic() - session.last_used > SESSION_TTL_SECONDS
 
 
 def reset_session(session_id: str, index_version: str) -> None:
     """Create a session, or reset it when a new page is indexed."""
-    _sessions[session_id] = PageSession(session_id, index_version)
+    with _sessions_lock:
+        _sessions[session_id] = PageSession(session_id, index_version)
+    evict_stale_sessions()
 
 
 def get_session(session_id: str) -> PageSession | None:
-    return _sessions.get(session_id)
+    session = _sessions.get(session_id)
+    if session is None or is_expired(session):
+        return None
+    session.last_used = time.monotonic()
+    return session
+
+
+def evict_stale_sessions() -> None:
+    """Drop expired sessions, then the least recently used beyond MAX_SESSIONS.
+
+    Their vectors are deleted too, so memory stays bounded over time.
+    """
+    with _sessions_lock:
+        by_age = sorted(_sessions.values(), key=lambda s: s.last_used)
+        excess = max(0, len(by_age) - MAX_SESSIONS)
+        stale = [
+            s.session_id
+            for i, s in enumerate(by_age)
+            if i < excess or is_expired(s)
+        ]
+        for session_id in stale:
+            del _sessions[session_id]
+
+    for session_id in stale:
+        try:
+            delete_session_index(session_id)
+        except Exception:
+            logger.exception("Failed to remove index for session %s", session_id)
 
 
 def add_message(session: PageSession, role: str, content: str) -> None:

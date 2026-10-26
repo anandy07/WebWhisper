@@ -26,3 +26,13 @@ COLLECTION_NAME = "webwhisper_pages"
 # Retrieval and chat
 TOP_K = 4
 MAX_HISTORY_MESSAGES = 10
+
+# Sessions: drop idle ones (and their vectors) so memory stays bounded.
+SESSION_TTL_SECONDS = 2 * 60 * 60
+MAX_SESSIONS = 50
+
+# Index request limits, so one huge page cannot stall the embedder.
+MAX_TITLE_CHARS = 1000
+MAX_HEADING_CHARS = 1000
+MAX_SOURCES = 2000
+MAX_PAGE_CHARS = 300_000

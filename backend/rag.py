@@ -79,6 +79,8 @@ def index_page(request: IndexPageRequest) -> tuple[int, str]:
 
             if source.heading:
                 metadata["heading"] = source.heading
+                # Embed the heading with the chunk so heading terms match too.
+                chunk = f"{source.heading}\n\n{chunk}"
 
             documents.append(Document(page_content=chunk, metadata=metadata))
 
@@ -118,6 +120,11 @@ def index_page(request: IndexPageRequest) -> tuple[int, str]:
         logger.exception("Failed to remove old indexes for %s", request.session_id)
 
     return len(documents), index_version
+
+
+def delete_session_index(session_id: str) -> None:
+    """Remove every stored chunk for a session."""
+    get_vector_store().delete(where={"session_id": {"$eq": session_id}})
 
 
 def retrieve_relevant_chunks(
