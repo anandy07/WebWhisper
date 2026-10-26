@@ -1,0 +1,14 @@
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Tests and operating system
+.pytest_cache/
+.DS_Store
